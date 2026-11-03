@@ -129,6 +129,10 @@
   var bar = d.getElementById('bar'), strip = d.getElementById('strip'), end = d.getElementById('end');
   var toast = d.getElementById('toast'), msg = d.getElementById('msg');
   var imgs = [].slice.call(strip.querySelectorAll('img')), n = imgs.length, lastY = 0, busy = false, saved = 0, rest = 0;
+  // Opening the page is not reading: nothing is saved until the reader moves, and while "Continue where you left off?"
+  // is unanswered no place before the kept one is saved (Claude 2026-11-03: the load itself saved the top of the page,
+  // so reopening an episode and leaving without tapping Continue lost the place).
+  var moved = false, offer = null;
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   function get() { try { return JSON.parse(localStorage.getItem(K) || 'null'); } catch (e) { return null; } }
   function put(v) { try { localStorage.setItem(K, JSON.stringify(v)); } catch (e) {} }
@@ -144,6 +148,7 @@
   }
   function keep() {
     var s = spot(), old = get() || {}, done = atEnd();
+    if (offer && !done && s.i + s.f < offer.i + offer.f) return;
     put({i: done ? 0 : s.i, f: done ? 0 : s.f, p: done ? 100 : Math.min(99, Math.round(100 * (s.i + s.f) / n)),
          done: done || !!old.done, t: Date.now()});
   }
@@ -152,14 +157,15 @@
     var y = Y(), m = d.documentElement.scrollHeight - innerHeight;
     bar.style.width = (m > 0 ? 100 * y / m : 0) + '%';
     if (y < 60 || atEnd()) bars(true); else if (y > lastY + 6) bars(false); else if (y < lastY - 6) bars(true);
-    if (!toast.hidden && toast.getAttribute('data-kind') === 'resume' && y > innerHeight) toast.hidden = true;
+    if (!toast.hidden && toast.getAttribute('data-kind') === 'resume' && y > innerHeight) { toast.hidden = true; offer = null; }
     lastY = y;
+    if (!moved) return;
     if (Date.now() - saved > 500) { saved = Date.now(); keep(); }
     clearTimeout(rest); rest = setTimeout(keep, 250);   // and once more when the scrolling stops: the last place counts
   }
-  addEventListener('scroll', function () { if (!busy) { busy = true; requestAnimationFrame(tick); } }, {passive: true});
-  addEventListener('pagehide', keep);
-  d.addEventListener('visibilitychange', function () { if (d.visibilityState === 'hidden') keep(); });
+  addEventListener('scroll', function () { moved = true; if (!busy) { busy = true; requestAnimationFrame(tick); } }, {passive: true});
+  addEventListener('pagehide', function () { if (moved) keep(); });
+  d.addEventListener('visibilitychange', function () { if (moved && d.visibilityState === 'hidden') keep(); });
   var downY = 0;                          // a tap on the art shows or hides the bars; a drag does not
   strip.addEventListener('pointerdown', function () { downY = Y(); });
   strip.addEventListener('click', function () { if (Math.abs(Y() - downY) < 8) bars(b.classList.contains('hide')); });
@@ -167,17 +173,17 @@
     var im = imgs[Math.min(s.i, n - 1)];
     if (im) scrollTo(0, Math.max(0, im.getBoundingClientRect().top + Y() + s.f * im.getBoundingClientRect().height - 52));
   }
-  function note(text, kind) { msg.textContent = text; toast.setAttribute('data-kind', kind); toast.hidden = false; }
+  function note(text, kind) { msg.textContent = text; toast.setAttribute('data-kind', kind); toast.hidden = false; if (kind !== 'resume') offer = null; }
   var s = get();
   if (s && s.i >= 2 && s.i < n - 2) {
     if (location.hash === '#continue') { go(s); }
     else {
-      note('Continue where you left off (' + s.p + '%)?', 'resume');
+      note('Continue where you left off (' + s.p + '%)?', 'resume'); offer = s;
       d.getElementById('yes').hidden = false;
-      d.getElementById('yes').onclick = function () { toast.hidden = true; go(s); };
+      d.getElementById('yes').onclick = function () { toast.hidden = true; offer = null; go(s); };
     }
   }
-  d.getElementById('no').onclick = function () { toast.hidden = true; };
+  d.getElementById('no').onclick = function () { toast.hidden = true; offer = null; };
   function share() {
     var u = location.href.split('#')[0];
     d.getElementById('yes').hidden = true;
